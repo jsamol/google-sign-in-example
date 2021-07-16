@@ -1,5 +1,7 @@
 package com.example.googlesigninexample
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
 import android.util.Log
@@ -14,15 +16,37 @@ import com.google.android.gms.auth.api.identity.BeginSignInRequest
 import com.google.android.gms.auth.api.identity.GetSignInIntentRequest
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.auth.api.identity.SignInClient
+import net.openid.appauth.*
 import org.json.JSONObject
 import kotlin.random.Random
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var signInClient: SignInClient
+
+    private val clientId: String by lazy { getString(R.string.client_id) }
+    private val serverClientId: String by lazy { getString(R.string.server_client_id) }
     private val nonce: String by lazy { Base64.encodeToString(Random.nextBytes(16), Base64.NO_WRAP) }
 
-    private lateinit var getCredentials: ActivityResultLauncher<IntentSenderRequest>
+    private lateinit var googleSignIn: ActivityResultLauncher<IntentSenderRequest>
+    private lateinit var appAuthSignIn: ActivityResultLauncher<Intent>
+
+    private val authorizationService: AuthorizationService by lazy { AuthorizationService(this) }
+
+    private val authorizationEndpoint: Uri
+        get() = Uri.parse(AUTHORIZATION_ENDPOINT)
+
+    private val tokenEndpoint: Uri
+        get() = Uri.parse(TOKEN_ENDPOINT)
+
+    private val redirectUrl: Uri
+        get() {
+            val clientIdentifierScheme = clientId
+                .split(".")
+                .reversed()
+                .joinToString(".")
+            return Uri.parse("$clientIdentifierScheme:$OAUTH2_CALLBACK_PATH")
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,7 +54,7 @@ class MainActivity : AppCompatActivity() {
 
         signInClient = Identity.getSignInClient(this)
 
-        getCredentials = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
+        googleSignIn = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
             val credentials = signInClient.getSignInCredentialFromIntent(it.data)
             val token = credentials.googleIdToken
 
@@ -38,22 +62,41 @@ class MainActivity : AppCompatActivity() {
             showToken(token)
         }
 
+        appAuthSignIn = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val authorizationResponse = result.data?.let { AuthorizationResponse.fromIntent(it) }
+            val exception = AuthorizationException.fromIntent(result.data)
+
+            if (authorizationResponse == null) {
+                exception?.printStackTrace()
+            } else {
+                val tokenRequest = authorizationResponse.createTokenExchangeRequest()
+                authorizationService.performTokenRequest(tokenRequest) { tokenResponse, exception ->
+                    if (tokenResponse == null) {
+                        exception?.printStackTrace()
+                    } else {
+                        showToken(tokenResponse.idToken)
+                    }
+                }
+            }
+        }
+
         findViewById<TextView>(R.id.nonceTextView).text = nonce
 
         findViewById<Button>(R.id.signInButton).setOnClickListener { signIn() }
         findViewById<Button>(R.id.oneTapButton).setOnClickListener { oneTap() }
+        findViewById<Button>(R.id.appAuthButton).setOnClickListener { appAuth() }
     }
 
     private fun signIn() {
         resetToken()
 
         val request = GetSignInIntentRequest.builder().apply {
-            setServerClientId(getString(R.string.server_client_id))
+            setServerClientId(serverClientId)
             // no method to set the nonce
         }.build()
 
         signInClient.getSignInIntent(request)
-            .addOnSuccessListener(this) { getCredentials.launch(IntentSenderRequest.Builder(it).build()) }
+            .addOnSuccessListener(this) { googleSignIn.launch(IntentSenderRequest.Builder(it).build()) }
             .addOnFailureListener(this) { it.printStackTrace() }
     }
 
@@ -63,7 +106,7 @@ class MainActivity : AppCompatActivity() {
         val request = BeginSignInRequest.builder().apply {
             setGoogleIdTokenRequestOptions(BeginSignInRequest.GoogleIdTokenRequestOptions.builder().apply {
                 setSupported(true)
-                setServerClientId(getString(R.string.server_client_id))
+                setServerClientId(serverClientId)
                 // setting the nonce
                 setNonce(nonce)
             }.build())
@@ -71,8 +114,32 @@ class MainActivity : AppCompatActivity() {
         }.build()
 
         signInClient.beginSignIn(request)
-            .addOnSuccessListener(this) { getCredentials.launch(IntentSenderRequest.Builder(it.pendingIntent).build()) }
+            .addOnSuccessListener(this) { googleSignIn.launch(IntentSenderRequest.Builder(it.pendingIntent).build()) }
             .addOnFailureListener(this) { it.printStackTrace() }
+    }
+
+    private fun appAuth() {
+        resetToken()
+
+        val configuration = AuthorizationServiceConfiguration(authorizationEndpoint, tokenEndpoint)
+        val authorizationRequest = AuthorizationRequest.Builder(
+            configuration,
+            clientId,
+            ResponseTypeValues.CODE,
+            redirectUrl,
+        ).apply {
+            val additionalParameters = mapOf(
+                "audience" to serverClientId,
+            )
+
+            setScope("${AuthorizationRequest.Scope.OPENID} ${AuthorizationRequest.Scope.EMAIL}")
+            setAdditionalParameters(additionalParameters)
+            // setting the nonce
+            setNonce(nonce)
+        }.build()
+
+        val intent = authorizationService.getAuthorizationRequestIntent(authorizationRequest)
+        appAuthSignIn.launch(intent)
     }
 
     private fun resetToken() {
@@ -96,5 +163,10 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+
+        private const val AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+        private const val TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+
+        private const val OAUTH2_CALLBACK_PATH = "/oauth2callback"
     }
 }

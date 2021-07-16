@@ -1,5 +1,8 @@
 <resources>
     <string name="app_name">GoogleSignInExample</string>
 
+    <string name="client_id">1057004765491-p2h6l70stohrad6tc5lc6qar5qi0cs0g.apps.googleusercontent.com</string>
+    <string name="client_id_reversed">com.googleusercontent.apps.1057004765491-p2h6l70stohrad6tc5lc6qar5qi0cs0g</string>
+
     <string name="server_client_id">1057004765491-3kg5eho383ff0n1v9irheqq6ubh8ri95.apps.googleusercontent.com</string>
 </resources>
